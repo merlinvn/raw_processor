@@ -67,7 +67,7 @@ fn extract_data(reader: &mut Reader<File>) -> Result<SingleRunData, Box<dyn Erro
                 .push((year - 2022, record.values[PFPR_COL].parse::<f64>().unwrap()));
         }
 
-        if year == 2032 && month == 1 && day == 1 {
+        if year == 2042 && month == 1 && day == 1 {
             break;
         }
     }
