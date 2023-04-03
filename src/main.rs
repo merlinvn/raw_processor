@@ -75,12 +75,13 @@ fn main() {
 
     // read folder path from command line
     let folder_path = std::env::args().nth(1).unwrap();
-    let n_params = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
-    let n_runs = std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
+    let n_params_from = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
+    let n_params_to = std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
+    let n_runs = std::env::args().nth(4).unwrap().parse::<usize>().unwrap();
 
     // let folder_path = "/home/neo/Projects/psu/MDA_AXX/A2_small/raw";
 
-    for param_id in 0..n_params {
+    for param_id in n_params_from..n_params_to {
         for run_id in 0..n_runs {
             let job_id = param_id * 1000 + run_id;
             let file_path = format!("{}/monthly_data_{}.txt", folder_path, job_id);
