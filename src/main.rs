@@ -1,4 +1,4 @@
-use csv::{Reader, ReaderBuilder, Writer};
+use csv::{Reader, ReaderBuilder, WriterBuilder};
 use serde::Deserialize;
 use std::{error::Error, fs::File};
 
@@ -36,35 +36,81 @@ const MDR2_IDS: [usize; 64] = [
 ];
 
 #[derive(Debug, Deserialize, Eq, PartialEq)]
-struct Row {
+struct InputRow {
     values: Vec<String>,
 }
 
+#[derive(serde::Serialize)]
+struct OutputRow {
+    param_id: usize,
+    run_id: usize,
+    year: i32,
+    pfpr: f64,
+    c580y_freq: f64,
+    plas_freq: f64,
+    kaf_oz_freq: f64,
+    mdr2_freq: f64,
+}
+
 struct SingleRunData {
-    pfpr_at_year_10: Option<f64>,
-    yearly_pfpr: Vec<(i32, f64)>,
+    yearly_data: Vec<(i32, f64, f64, f64, f64, f64)>,
 }
 
 fn extract_data(reader: &mut Reader<File>) -> Result<SingleRunData, Box<dyn Error>> {
     // for each row in the reader
     let iter = reader.deserialize();
     let mut run_result = SingleRunData {
-        pfpr_at_year_10: None,
-        yearly_pfpr: Vec::new(),
+        yearly_data: Vec::new(),
     };
     for result in iter {
-        let record: Row = result.unwrap();
+        let record: InputRow = result.unwrap();
         let year = record.values[YEAR_COL].parse::<i32>().unwrap();
         let month = record.values[MONTH_COL].parse::<u32>().unwrap();
         let day = record.values[DAY_COL].parse::<u32>().unwrap();
-        // check if year is 2032 month is 1 and day is 1
-        if year == 2032 && month == 1 && day == 1 {
-            run_result.pfpr_at_year_10 = Some(record.values[PFPR_COL].parse::<f64>().unwrap());
-        }
+
         if month == 1 && day == 1 {
-            run_result
-                .yearly_pfpr
-                .push((year - 2022, record.values[PFPR_COL].parse::<f64>().unwrap()));
+            let pfpr = record.values[PFPR_COL].parse::<f64>().unwrap();
+
+            let mut sum = 0.0;
+            for i in GENOTYPE0_COL..GENOTYPE127_COL {
+                let genotype = record.values[i].parse::<f64>().unwrap();
+                sum += genotype;
+            }
+
+            let mut sum_c580y = 0.0;
+            for i in C580Y_IDS.iter() {
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                sum_c580y += genotype;
+            }
+
+            let mut sum_plas = 0.0;
+            for i in PLAS_IDS.iter() {
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                sum_plas += genotype;
+            }
+
+            let mut sum_kaf_oz = 0.0;
+            for i in KAF_OZ_IDS.iter() {
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                sum_kaf_oz += genotype;
+            }
+
+            let mut sum_mdr2 = 0.0;
+            for i in MDR2_IDS.iter() {
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                sum_mdr2 += genotype;
+            }
+
+            // println!("{} {} {}", year - 2022, pfpr, sum_c580y / sum);
+
+            run_result.yearly_data.push((
+                year - 2022,
+                pfpr,
+                sum_c580y / sum,
+                sum_plas / sum,
+                sum_kaf_oz / sum,
+                sum_mdr2 / sum,
+            ));
         }
 
         if year == 2042 && month == 1 && day == 1 {
@@ -76,7 +122,11 @@ fn extract_data(reader: &mut Reader<File>) -> Result<SingleRunData, Box<dyn Erro
 }
 
 fn main() {
-    let mut pfpr_yearly = Writer::from_path("pfpr_yearly.csv").unwrap();
+    let mut yearly_data_file = WriterBuilder::new()
+        .delimiter(b',')
+        .has_headers(true)
+        .from_path("yearly_data.csv")
+        .unwrap();
 
     // read folder path from command line
     let folder_path = std::env::args().nth(1).unwrap();
@@ -87,27 +137,55 @@ fn main() {
     // let folder_path = "/home/neo/Projects/psu/MDA_AXX/A2_small/raw";
 
     for param_id in n_params_from..n_params_to {
+        println!("extracting data for param_id: {}", param_id);
         for run_id in 0..n_runs {
             let job_id = param_id * 1000 + run_id;
             let file_path = format!("{}/monthly_data_{}.txt", folder_path, job_id);
-            let file = File::open(file_path).expect("Unable to open file");
+            let file = File::open(file_path);
+            let file = match file {
+                Ok(file) => file,
+                Err(_) => {
+                    println!(
+                        "Unable to open file for param_id: {}, run_id: {}, job_id: {}",
+                        param_id, run_id, job_id
+                    );
+                    continue;
+                }
+            };
+
             let mut rdr = ReaderBuilder::new()
                 .delimiter(b'\t')
                 .has_headers(false)
                 .from_reader(file);
 
             let result = extract_data(&mut rdr);
+
             match result {
                 Ok(result) => {
-                    for (year, pfpr) in result.yearly_pfpr {
-                        pfpr_yearly
-                            .write_record(&[
-                                param_id.to_string(),
-                                run_id.to_string(),
-                                year.to_string(),
-                                pfpr.to_string(),
-                            ])
+                    for (year, pfpr, c580y_freq, plas_freq, kaf_oz_freq, mdr2_freq) in
+                        result.yearly_data
+                    {
+                        yearly_data_file
+                            .serialize(OutputRow {
+                                param_id,
+                                run_id,
+                                year,
+                                pfpr,
+                                c580y_freq,
+                                plas_freq,
+                                kaf_oz_freq,
+                                mdr2_freq,
+                            })
                             .unwrap();
+                        // yearly_data_file
+                        //     .write_record(&[
+                        //         param_id.to_string(),
+                        //         run_id.to_string(),
+                        //         year.to_string(),
+                        //         pfpr.to_string(),
+                        //         c580y_freq.to_string(),
+                        //     ])
+                        //     .unwrap();
                     }
                 }
                 Err(e) => {
@@ -116,7 +194,7 @@ fn main() {
                 }
             }
             // param id, run id (0-99), pfpr_at_year_10
-            pfpr_yearly.flush().unwrap();
+            yearly_data_file.flush().unwrap();
         }
     }
 }
