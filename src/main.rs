@@ -2,11 +2,15 @@ use csv::{Reader, ReaderBuilder, WriterBuilder};
 use serde::Deserialize;
 use std::{error::Error, fs::File};
 
-const PFPR_COL: usize = 12;
-const NEW_INFECTIONS_COL: usize = 16;
-const POSITIVE_CASES_COL: usize = 280;
-const GENOTYPE0_COL: usize = 22;
-const GENOTYPE127_COL: usize = 22 + 127;
+const PFPR_COL: usize = 16;
+const MONTHLY_NEW_INFECTIONS_COL: usize = 17;
+const MONTHLY_POSITIVE_CASES_COL: usize = 158;
+const CUMULATIVE_NTF_COL: usize = 23;
+const CUMULATIVE_TF_COL: usize = 24;
+const POPULATION_SIZE_COL: usize = 8;
+const EIR_COL: usize = 10;
+const GENOTYPE0_COL: usize = 29;
+const GENOTYPE127_COL: usize = 29 + 127;
 const YEAR_COL: usize = 2;
 const MONTH_COL: usize = 3;
 const DAY_COL: usize = 4;
@@ -50,10 +54,24 @@ struct OutputRow {
     plas_freq: f64,
     kaf_oz_freq: f64,
     mdr2_freq: f64,
+    ntf: f64,
+    tf: f64,
+}
+
+struct YearlyData {
+    year: i32,
+    pfpr: f64,
+    c580y_freq: f64,
+    plas_freq: f64,
+    kaf_oz_freq: f64,
+    mdr2_freq: f64,
+    ntf: f64,
+    tf: f64,
 }
 
 struct SingleRunData {
-    yearly_data: Vec<(i32, f64, f64, f64, f64, f64)>,
+    yearly_data: Vec<YearlyData>,
+    monthly_data: Vec<(i32, i32, f64, f64)>,
 }
 
 fn extract_data(reader: &mut Reader<File>) -> Result<SingleRunData, Box<dyn Error>> {
@@ -61,61 +79,76 @@ fn extract_data(reader: &mut Reader<File>) -> Result<SingleRunData, Box<dyn Erro
     let iter = reader.deserialize();
     let mut run_result = SingleRunData {
         yearly_data: Vec::new(),
+        monthly_data: Vec::new(),
     };
+    let mut is_complete = false;
     for result in iter {
-        let record: InputRow = result.unwrap();
-        let year = record.values[YEAR_COL].parse::<i32>().unwrap();
-        let month = record.values[MONTH_COL].parse::<u32>().unwrap();
-        let day = record.values[DAY_COL].parse::<u32>().unwrap();
+        let record: InputRow = result?;
+        let year = record.values[YEAR_COL].parse::<i32>()?;
+        let month = record.values[MONTH_COL].parse::<u32>()?;
+        let day = record.values[DAY_COL].parse::<u32>()?;
 
         if month == 1 && day == 1 {
-            let pfpr = record.values[PFPR_COL].parse::<f64>().unwrap();
+            let pfpr = record.values[PFPR_COL].parse::<f64>()?;
 
             let mut sum = 0.0;
             for i in GENOTYPE0_COL..GENOTYPE127_COL {
-                let genotype = record.values[i].parse::<f64>().unwrap();
+                let genotype = record.values[i].parse::<f64>()?;
                 sum += genotype;
             }
 
             let mut sum_c580y = 0.0;
             for i in C580Y_IDS.iter() {
-                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>()?;
                 sum_c580y += genotype;
             }
 
             let mut sum_plas = 0.0;
             for i in PLAS_IDS.iter() {
-                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>()?;
                 sum_plas += genotype;
             }
 
             let mut sum_kaf_oz = 0.0;
             for i in KAF_OZ_IDS.iter() {
-                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>()?;
                 sum_kaf_oz += genotype;
             }
 
             let mut sum_mdr2 = 0.0;
             for i in MDR2_IDS.iter() {
-                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>().unwrap();
+                let genotype = record.values[*i + GENOTYPE0_COL].parse::<f64>()?;
                 sum_mdr2 += genotype;
             }
 
+            let pop_size = record.values[POPULATION_SIZE_COL].parse::<f64>()?;
+            let mut ntf = record.values[CUMULATIVE_NTF_COL].parse::<f64>()?;
+            let mut tf = record.values[CUMULATIVE_TF_COL].parse::<f64>()?;
+            ntf *= 100.0 / pop_size;
+            tf *= 100.0 / pop_size;
+
             // println!("{} {} {}", year - 2022, pfpr, sum_c580y / sum);
 
-            run_result.yearly_data.push((
-                year - 2022,
+            run_result.yearly_data.push(YearlyData {
+                year: year - 2022,
                 pfpr,
-                sum_c580y / sum,
-                sum_plas / sum,
-                sum_kaf_oz / sum,
-                sum_mdr2 / sum,
-            ));
+                c580y_freq: sum_c580y / sum,
+                plas_freq: sum_plas / sum,
+                kaf_oz_freq: sum_kaf_oz / sum,
+                mdr2_freq: sum_mdr2 / sum,
+                ntf,
+                tf,
+            });
         }
 
-        if year == 2042 && month == 1 && day == 1 {
+        if year == 2027 && month == 1 && day == 1 {
+            is_complete = true;
             break;
         }
+    }
+
+    if !is_complete {
+        return Err("Run is not complete".into());
     }
 
     Ok(run_result)
@@ -146,7 +179,7 @@ fn main() {
                 Ok(file) => file,
                 Err(_) => {
                     println!(
-                        "Unable to open file for param_id: {}, run_id: {}, job_id: {}",
+                        "ERROR: Unable to open file for param_id: {}, run_id: {}, job_id: {}",
                         param_id, run_id, job_id
                     );
                     continue;
@@ -162,19 +195,19 @@ fn main() {
 
             match result {
                 Ok(result) => {
-                    for (year, pfpr, c580y_freq, plas_freq, kaf_oz_freq, mdr2_freq) in
-                        result.yearly_data
-                    {
+                    for yearly_data in result.yearly_data {
                         yearly_data_file
                             .serialize(OutputRow {
                                 param_id,
                                 run_id,
-                                year,
-                                pfpr,
-                                c580y_freq,
-                                plas_freq,
-                                kaf_oz_freq,
-                                mdr2_freq,
+                                year: yearly_data.year,
+                                pfpr: yearly_data.pfpr,
+                                c580y_freq: yearly_data.c580y_freq,
+                                plas_freq: yearly_data.plas_freq,
+                                kaf_oz_freq: yearly_data.kaf_oz_freq,
+                                mdr2_freq: yearly_data.mdr2_freq,
+                                ntf: yearly_data.ntf,
+                                tf: yearly_data.tf,
                             })
                             .unwrap();
                         // yearly_data_file
@@ -189,7 +222,10 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    println!("param_id: {}, run_id:{}, Error: {}", param_id, run_id, e);
+                    println!(
+                        "ERROR: param_id: {}, run_id:{}, Error: {}",
+                        param_id, run_id, e
+                    );
                     continue;
                 }
             }
