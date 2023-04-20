@@ -92,7 +92,7 @@ fn extract_data(reader: &mut Reader<File>) -> Result<SingleRunData, Box<dyn Erro
             let pfpr = record.values[PFPR_COL].parse::<f64>()?;
 
             let mut sum = 0.0;
-            for i in GENOTYPE0_COL..GENOTYPE127_COL {
+            for i in GENOTYPE0_COL..GENOTYPE127_COL + 1 {
                 let genotype = record.values[i].parse::<f64>()?;
                 sum += genotype;
             }
